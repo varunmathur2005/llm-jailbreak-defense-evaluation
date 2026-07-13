@@ -3,10 +3,14 @@
 from attacks.base import BaseAttack
 from attacks.none import NoneAttack
 from attacks.template import TemplateAttack
+from attacks.gcg import GCGAttack
+from attacks.pair import PAIRAttack
 
 REGISTRY: dict[str, type[BaseAttack]] = {
     "none": NoneAttack,
     "template": TemplateAttack,
+    "gcg": GCGAttack,
+    "pair": PAIRAttack,
 }
 
 
