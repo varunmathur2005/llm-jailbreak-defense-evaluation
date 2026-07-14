@@ -29,8 +29,8 @@ from rich import box
 import config
 from model_client import ModelClient
 from attacks import get_attack
-from defenses import get_defense
-from judge import is_attack_success_refusal
+from defenses import defense_requires_guard, get_defense
+from judge import refusal_check
 
 console = Console()
 
@@ -114,7 +114,11 @@ def evaluate_condition(
     target_stats = meta.get("target_stats", {})
     target_latency_s = target_stats.get("latency_s", 0)
     guard_latency_s = guard_stats.get("latency_s", 0)
-    total_latency_s = target_latency_s + guard_latency_s
+    defense_latency_s = meta.get("defense_latency_s", 0)
+    active_defense_latency_s = (
+        defense_latency_s if "defense_latency_s" in meta else guard_latency_s
+    )
+    total_latency_s = target_latency_s + active_defense_latency_s
     if not total_latency_s:
         total_latency_s = defense_elapsed_s
 
@@ -124,12 +128,47 @@ def evaluate_condition(
     if verbose:
         _print_response(response)
 
+    refusal_detected = refusal_check(response)
+
     return {
         "response": response,
         "guard_label": guard_label,
-        "success_refusal": is_attack_success_refusal(response),
+        "refusal_detected": refusal_detected,
+        # Backward-compatible legacy name: True means attack success/no refusal.
+        "success_refusal": not refusal_detected,
         "blocked_by_guard": meta.get("blocked_by_guard", False),
         "response_replaced": meta.get("response_replaced", False),
+        "defense_name": meta.get("defense_name", ""),
+        "defense_stage": meta.get("defense_stage", ""),
+        "defense_blocked": meta.get("defense_blocked", False),
+        "defense_latency_s": defense_latency_s,
+        "target_invoked": meta.get("target_invoked", True),
+        "perplexity_status": meta.get("perplexity_status", ""),
+        "perplexity_measured": meta.get("perplexity_measured", False),
+        "perplexity_score": meta.get("perplexity_score"),
+        "perplexity_threshold": meta.get("perplexity_threshold"),
+        "perplexity_token_count": meta.get("perplexity_token_count", 0),
+        "perplexity_predicted_token_count": meta.get(
+            "perplexity_predicted_token_count", 0
+        ),
+        "perplexity_model": meta.get("perplexity_model", ""),
+        "perplexity_device": meta.get("perplexity_device", ""),
+        "perplexity_stride": meta.get("perplexity_stride", 0),
+        "perplexity_latency_ms": meta.get("perplexity_latency_ms", 0),
+        "perplexity_model_loaded_this_query": meta.get(
+            "perplexity_model_loaded_this_query", False
+        ),
+        "perplexity_model_load_latency_ms": meta.get(
+            "perplexity_model_load_latency_ms", 0
+        ),
+        "perplexity_failure_policy": meta.get("perplexity_failure_policy", ""),
+        "perplexity_error": meta.get("perplexity_error", ""),
+        "llama_guard_mode": meta.get("llama_guard_mode", ""),
+        "llama_guard_model": meta.get("llama_guard_model", ""),
+        "llama_guard_failure_policy": meta.get("llama_guard_failure_policy", ""),
+        "input_guard": meta.get("input_guard"),
+        "output_guard": meta.get("output_guard"),
+        "guard_total_latency_s": meta.get("guard_total_latency_s", guard_latency_s),
         "target_latency_s": target_latency_s,
         "guard_latency_s": guard_latency_s,
         "total_latency_s": total_latency_s,
@@ -172,7 +211,7 @@ def run(
     run_id: str | None = None,
 ) -> list[dict]:
     """Full evaluation: returns one record per behavior."""
-    uses_guard_defense = defense_name in {"llama_guard", "both"}
+    uses_guard_defense = defense_requires_guard(defense_name)
     if not skip_startup_check:
         required = [target_model]
         if uses_guard_defense:
@@ -217,14 +256,12 @@ def run(
 
         messages = attack.build_messages(behavior_text)
 
-        # Condition A: attack, no defense
         if verbose:
-            console.print("\n[bold yellow]── Condition A (no defense) ──[/bold yellow]")
+            console.print(
+                f"\n[bold yellow]── Selected defense ({defense_name}) ──[/bold yellow]"
+            )
         cond = evaluate_condition(messages, with_defense, verbose=verbose)
 
-        # Condition B: attack + chosen defense
-        if verbose:
-            console.print(f"\n[bold yellow]── Condition B ({defense_name}) ──[/bold yellow]")
         _log_condition(defense_name, cond)
 
         records.append({
@@ -235,9 +272,41 @@ def run(
             "behavior": behavior_text,
             "prompt_sent": messages[0]["content"],
             "guard_label": cond["guard_label"],
+            "refusal_detected": cond["refusal_detected"],
             "success_refusal": cond["success_refusal"],
             "blocked_by_guard": cond["blocked_by_guard"],
             "response_replaced": cond["response_replaced"],
+            "defense_name": cond["defense_name"],
+            "defense_stage": cond["defense_stage"],
+            "defense_blocked": cond["defense_blocked"],
+            "defense_latency_s": cond["defense_latency_s"],
+            "target_invoked": cond["target_invoked"],
+            "perplexity_status": cond["perplexity_status"],
+            "perplexity_measured": cond["perplexity_measured"],
+            "perplexity_score": cond["perplexity_score"],
+            "perplexity_threshold": cond["perplexity_threshold"],
+            "perplexity_token_count": cond["perplexity_token_count"],
+            "perplexity_predicted_token_count": cond[
+                "perplexity_predicted_token_count"
+            ],
+            "perplexity_model": cond["perplexity_model"],
+            "perplexity_device": cond["perplexity_device"],
+            "perplexity_stride": cond["perplexity_stride"],
+            "perplexity_latency_ms": cond["perplexity_latency_ms"],
+            "perplexity_model_loaded_this_query": cond[
+                "perplexity_model_loaded_this_query"
+            ],
+            "perplexity_model_load_latency_ms": cond[
+                "perplexity_model_load_latency_ms"
+            ],
+            "perplexity_failure_policy": cond["perplexity_failure_policy"],
+            "perplexity_error": cond["perplexity_error"],
+            "llama_guard_mode": cond["llama_guard_mode"],
+            "llama_guard_model": cond["llama_guard_model"],
+            "llama_guard_failure_policy": cond["llama_guard_failure_policy"],
+            "input_guard": cond["input_guard"],
+            "output_guard": cond["output_guard"],
+            "guard_total_latency_s": cond["guard_total_latency_s"],
             "target_latency_s": cond["target_latency_s"],
             "guard_latency_s": cond["guard_latency_s"],
             "total_latency_s": cond["total_latency_s"],
@@ -270,7 +339,7 @@ def run_suite(
 ) -> list[dict]:
     """Evaluate the same attack/defense across multiple target models."""
     required = [*target_models]
-    if defense_name in {"llama_guard", "both"}:
+    if defense_requires_guard(defense_name):
         required.append(guard_model)
     check_ollama(base_url, required)
 
@@ -465,7 +534,7 @@ def build_markdown_report(
         f"- Defense: `{run_meta['defense']}`",
         f"- Behaviors: `{run_meta['n_behaviors']}`",
         f"- Target models: `{', '.join(run_meta['target_models'])}`",
-        f"- Guard model: `{run_meta['guard_model']}`" if run_meta["defense"] in {"llama_guard", "both"} else "- Guard model: `not used`",
+        f"- Guard model: `{run_meta['guard_model']}`" if defense_requires_guard(run_meta["defense"]) else "- Guard model: `not used`",
         f"- Timestamp: `{run_meta['timestamp']}`",
         f"- Raw JSON: `{json_path.name}`",
         f"- Raw CSV: `{csv_path.name}`",

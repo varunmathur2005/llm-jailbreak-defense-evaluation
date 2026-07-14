@@ -17,10 +17,15 @@ class ModelClient:
         text, _ = self.chat_with_stats(messages)
         return text
 
-    def chat_with_stats(self, messages: list[dict]) -> tuple[str, dict]:
+    def chat_with_stats(
+        self, messages: list[dict], options: dict | None = None
+    ) -> tuple[str, dict]:
         """Send a messages list and return (assistant reply text, timing/token stats)."""
         start = perf_counter()
-        response = self._client.chat(model=self.model, messages=messages)
+        kwargs = {"model": self.model, "messages": messages}
+        if options is not None:
+            kwargs["options"] = options
+        response = self._client.chat(**kwargs)
         latency_s = perf_counter() - start
 
         prompt_tokens = getattr(response, "prompt_eval_count", 0) or 0
