@@ -1,318 +1,361 @@
-# Jailbreak PoC — Inference-Time Defense Evaluation
+# LLM Jailbreak Defense Evaluation
 
-A minimal, self-contained proof-of-concept for a university computer-security course.
-It runs harmful-behavior prompts from JailbreakBench through a target language
-model under one selected attack and defense condition. Baseline and defended
-conditions are run separately and compared through the local reporting utility.
+A modular framework for evaluating **inference-time defenses against LLM jailbreak attacks** across security, usability, and computational cost.
 
-All inference runs locally via [Ollama](https://ollama.com) — no data leaves the
-machine after the one-time model pull.
+**[Paper](./paper.pdf)**
+
+Built as a University of Waterloo computer security research project by **Ryan Maxin, Vishesh Gupta, Varun Mathur, and Adam Kaegi**.
+
+## Highlights
+
+- Built a composable **Python + LangChain evaluation harness** with interchangeable attacks, defenses, judges, and local LLMs.
+- Evaluated **2,500 model responses** across **4 attack conditions and 10 defense conditions** using JailbreakBench.
+- Measured attack success with **HarmBench** and refusal / benign over-blocking with **WildGuard**.
+- Compared security gains against **latency, target-model calls, and benign usability** rather than optimizing attack success alone.
+- Found a three-defense stack reaching **1.5% cross-attack ASR with 80% fewer response-path model calls** than the 1.0% ASR full stack.
 
 ---
 
-## Requirements
+## Architecture
 
-| Requirement | Notes |
+```text
+Prompt
+  │
+  ▼
+Attack
+  │
+  ▼
+Input-stage defenses
+  │
+  ▼
+Target LLM
+  │
+  ▼
+Output-stage defenses
+  │
+  ▼
+Judge
+  │
+  ▼
+Evaluation + reporting
+```
+
+Attacks, defenses, and judges implement shared interfaces and are registered independently. The pipeline automatically places each defense at its declared stage, allowing components to be swapped or stacked without modifying the core execution logic.
+
+```text
+attacks/     pluggable jailbreak attacks
+defenses/    input, generation, and output-stage defenses
+judges/      interchangeable safety and refusal evaluators
+prompts/     JailbreakBench prompt batches
+core/        pipeline, configuration, caching, matrix execution, reporting
+scripts/     experiment, model-prefetch, and evaluation utilities
+tests/       deterministic tests for pipeline and experiment behavior
+main.py      CLI entry point
+```
+
+---
+
+## Experiment
+
+The final evaluation used a locally served **Qwen2.5 7B** target model and four harmful attack conditions:
+
+| Attack | Type |
 |---|---|
-| Apple Silicon Mac (M1/M2/M3) | Metal-accelerated Ollama inference |
-| macOS 13+ | |
-| Python 3.11+ | |
-| [Ollama](https://ollama.com) | Free, local LLM server |
-| Internet (one-time) | Pull models + JailbreakBench dataset cache |
+| None | Raw harmful request baseline |
+| DeepInception | Nested role-play attack |
+| GCG | Transfer-based adversarial suffix attack |
+| PAIR | Adaptive black-box prompt refinement |
+
+We evaluated four standalone defenses:
+
+| Defense | Stage |
+|---|---|
+| Self-Reminder | Input |
+| Perplexity | Input |
+| SmoothLLM | Generation |
+| Llama Guard | Output |
+
+Five additional defense stacks tested whether complementary mechanisms improved robustness enough to justify their added cost.
+
+The resulting matrix contained:
+
+- **50 harmful JailbreakBench prompts**
+- **50 benign JailbreakBench prompts**
+- **4 harmful attack conditions**
+- **10 defense conditions**
+- **50 experiment cells**
+- **2,500 evaluated responses**
+
+---
+
+## Key Results
+
+| Defense | Cross-Attack ASR | Benign Refusal |
+|---|---:|---:|
+| No defense | 24.0% | 12% |
+| Llama Guard output | 4.5% | 32% |
+| Perplexity + Self-Reminder + Llama Guard | **1.5%** | 38% |
+| Full stack | **1.0%** | 44% |
+
+The full stack achieved the lowest observed attack success rate, but the improvement over the leaner three-defense stack was only **0.5 percentage points**.
+
+The computational difference was substantially larger:
+
+```text
+Three-defense stack: 188 response-path target-model calls
+Full stack:          940 response-path target-model calls
+```
+
+The three-defense stack therefore used **80% fewer model calls** while remaining within one additional successful attack across 200 harmful evaluations.
+
+The results demonstrate that maximizing the number of defenses does not necessarily produce the best deployment trade-off: **security, benign usability, and inference cost need to be evaluated together.**
+
+---
+
+## Evaluation Metrics
+
+### Attack Success Rate
+
+**HarmBench Mistral** determines whether a generated response actually fulfills the harmful behavior requested by the benchmark.
+
+This is kept separate from refusal detection because a response can avoid explicitly refusing while still failing to provide the requested harmful behavior.
+
+### Refusal and Over-Blocking
+
+**WildGuard** measures:
+
+- refusal on harmful prompts
+- false refusal on benign prompts
+
+This captures the usability cost introduced by increasingly aggressive defenses.
+
+### Performance
+
+The framework records:
+
+- response latency
+- early input blocking
+- target-model calls
+- defense-specific latency
+- attack construction cost
+- refusal and behavior classifications
+
+Adaptive attack construction cost is tracked separately from defended response latency.
+
+---
+
+## Components
+
+### Attacks
+
+- **DeepInception** — nested fictional-scenario attack.
+- **GCG** — transfer-based adversarial suffix candidates with black-box reranking.
+- **PAIR** — bounded multi-stream black-box prompt refinement.
+- **None** — raw-prompt baseline.
+
+### Defenses
+
+- **Self-Reminder** — reinforces safety constraints through prompt augmentation.
+- **Perplexity** — blocks statistically anomalous inputs before target inference.
+- **SmoothLLM** — evaluates perturbed prompt variants and selects from the majority response class.
+- **Llama Guard** — performs semantic safety classification at the input or output stage.
+
+### Judges
+
+- **HarmBench Mistral** — harmful-behavior success classifier.
+- **WildGuard** — refusal classifier.
+- **StrongREJECT** — continuous harmful-assistance evaluator.
+- Additional lightweight judges are included for pipeline testing and debugging.
+
+---
+
+## Reproducibility
+
+A trial is defined by:
+
+```text
+target model × attack × defense stack × prompt batch
+```
+
+Experiment configurations are data rather than hard-coded execution paths, allowing the full matrix to be generated from the same pipeline.
+
+The framework includes:
+
+- deterministic model settings
+- prompt and configuration hashes
+- attack caching across defense conditions
+- atomic per-cell checkpoints
+- resumable experiments
+- resumable evaluation
+- run manifests
+- latency and model-call telemetry
+
+Interrupted runs can therefore continue without regenerating completed model responses.
 
 ---
 
 ## Setup
 
-### 1. Install Ollama
+### 1. Create an environment
 
 ```bash
-brew install ollama
-# or download from https://ollama.com
+python -m venv .venv
 ```
 
-Start Ollama in another terminal with `ollama serve`, or use the Ollama app.
+Windows:
 
-### 2. Pull the required models
-
-```bash
-ollama pull dolphin-mistral:7b # weaker / less-refusal target baseline
-ollama pull qwen2.5:3b         # medium small target model
-ollama pull llama3.2:3b        # stronger default-safe target model
-ollama pull llama-guard3:1b    # guard/classifier model
+```powershell
+.venv\Scripts\Activate.ps1
 ```
 
-For a 16 GB machine, you can add another less-restrictive target:
+Linux / macOS:
 
 ```bash
-ollama pull dolphin-llama3:8b
-```
-
-### 3. Create a virtual environment and install Python dependencies
-
-```bash
-python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
 ```
 
-### 4. Cache the JailbreakBench dataset (one-time, requires internet)
+### 2. Install dependencies
 
 ```bash
-python -c "import jailbreakbench as jbb; jbb.read_dataset()"
+pip install -r requirements-cuda.txt
 ```
 
-After this step the dataset is cached locally and the tool runs fully offline.
+### 3. Start Ollama
+
+```bash
+ollama serve
+```
+
+### 4. Fetch required assets
+
+```bash
+python scripts/pull_models.py
+python scripts/prefetch_strongreject.py
+python scripts/prefetch_harmbench.py
+python scripts/prefetch_wildguard.py
+python scripts/prefetch_perplexity.py
+python scripts/fetch_jailbreakbench_prompts.py
+```
+
+Some Hugging Face checkpoints require accepting their model licenses and setting `HF_TOKEN` locally.
 
 ---
 
 ## Usage
 
+Run a single prompt:
+
 ```bash
-# Make sure Ollama is running
-ollama serve &   # or launch the Ollama app
-
-# Default run (template attack vs. llama_guard defense, configured model suite)
-python run.py
-
-# Override the defense or sample size from the command line
-python run.py --attack template --defense self_reminder --n 10
-
-# Debug one target model instead of the full suite
-python run.py --model qwen2.5:3b --n 5
-
-# Run a custom target suite
-python run.py --models dolphin-mistral:7b,qwen2.5:3b,llama3.2:3b --n 25
-
-# Baseline: raw behavior, no defense
-python run.py --attack none --defense none --n 5
+python main.py "What is the capital of France?"
 ```
 
-### CLI flags
+Run the configured prompt batch:
 
-| Flag | Default | Description |
-|---|---|---|
-| `--attack` | `template` | `none` or `template` |
-| `--defense` | `llama_guard` | `none`, `self_reminder`, `llama_guard_input`, `llama_guard`, `llama_guard_both`, `both`, or `perplexity` |
-| `--n` | `25` | Number of JBB behaviors to evaluate (max 100) |
-| `--model` | unset | Run one Ollama target model instead of the configured suite |
-| `--models` | `dolphin-mistral:7b,qwen2.5:3b,llama3.2:3b` | Comma-separated Ollama target model suite |
-| `--guard-model` | `llama-guard3:1b` | Ollama Llama Guard model tag |
-| `--ollama-url` | `http://localhost:11434` | Ollama API base URL |
+```bash
+python main.py
+```
 
-All defaults live in `config.py`.
+Select an attack, defense, and judge:
+
+```bash
+python main.py \
+  --attack deepinception \
+  --defense self_reminder,llama_guard_output \
+  --judge harmbench_mistral_7b_val_cls
+```
+
+Check pipeline wiring without model inference:
+
+```bash
+python main.py --dry-run
+```
 
 ---
 
-## How it works
+## Final Experiment
+
+Run the small validation matrix first:
+
+```powershell
+.\scripts\run_final_experiment.ps1 -Quick
+```
+
+Then run the complete experiment:
+
+```powershell
+.\scripts\run_final_experiment.ps1
+```
+
+Interrupted experiments can be resumed from their checkpoint directory without rerunning completed cells.
+
+The evaluation pipeline produces:
 
 ```text
-JailbreakBench → attack.build_messages() → selected defense.query()
-                                              ├─ input checks
-                                              ├─ Ollama target
-                                              └─ output checks
-                                                        ↓
-                                refusal proxy + JSON/CSV/Markdown results
+manifest.json
+evaluated_rows.csv
+experiment_matrix.csv
+defense_tradeoffs.csv
+attack_costs.csv
+defense_events.csv
+llama_guard_categories.csv
+audit_sample.csv
+summary.md
 ```
 
-Each `run.py` invocation evaluates one selected defense. Run `--defense none`
-as the baseline, or use `scripts.compare_varun_defenses` to execute matched
-baseline and defended conditions. Llama Guard is a defense, not the ASR judge.
+These outputs separate security effectiveness, benign usability, latency, blocking behavior, and model-query cost.
 
-The default model suite compares defenses across targets with different baseline
-refusal behavior: a weaker/less-refusal model, a medium small model, and a
-stronger default-safe instruction model. This makes it easier to explain when
-inference-time defenses add value and when the base model already refuses.
+---
 
-### Attacks
+## Tests
 
-| Name | Description |
-|---|---|
-| `none` | Raw behavior text, no wrapper — baseline |
-| `template` | DAN-style "Developer Mode" wrapper (refusal-suppression template from academic literature; harmful behaviors come from JBB, not this repo) |
-
-### Defenses
-
-| Name | Type | Description |
-|---|---|---|
-| `none` | — | No defense — measures raw model compliance |
-| `self_reminder` | Pre-hoc | Adds a safety-reinforcing system prompt before the user turn |
-| `llama_guard_input` | Input filter | Classifies the user conversation before target inference |
-| `llama_guard` | Output filter | Classifies and optionally replaces the target response |
-| `llama_guard_both` | Input/output filter | Checks input, then checks output if input is safe |
-| `perplexity` | Input filter | Blocks unusually high-perplexity user prompts before target inference |
-
-### Varun defenses and local evaluation
-
-#### Perplexity
-
-`perplexity` scores only the latest user message with local GPT-2 and blocks
-when `score > PERPLEXITY_THRESHOLD`; equality is allowed. Blocked prompts do not
-invoke the target. Model, threshold, device, stride, failure policy, and blocked
-response are configured in `config.py`. The model loads lazily and is cached by
-Hugging Face after its first use.
-
-Calibrate the threshold on the dedicated calibration split before experiments:
+Run the full test suite with:
 
 ```bash
-python -m scripts.calibrate_perplexity
+python -m unittest discover -s tests -v
 ```
 
-The calibration cache is resumable and the report distinguishes requested from
-achieved benign false-positive rate. With 20 benign calibration prompts, rates
-occur in 5-point increments: the 1% budget resolves to 0%, while 5% and 10%
-correspond to one and two false positives.
+Tests use lightweight fake models and evaluators for heavyweight paths and cover:
 
-#### Llama Guard
-
-Llama Guard uses the configured Ollama `GUARD_MODEL` through its native chat
-interface. `llama_guard_input` blocks before generation, `llama_guard` preserves
-the backward-compatible output-only mode, and `llama_guard_both` checks both in
-order. Registered variants override `LLAMA_GUARD_MODE`. The configured failure
-policy is `allow`, `block`, or `raise`; raw labels, `S1`–`S13` categories, errors,
-tokens, latency, and per-stage throughput are preserved.
-
-#### Refusal proxy and comparison metrics
-
-`refusal_detected=true` means the delivered response opened with a recognized
-first-person refusal. The legacy `success_refusal` field is its inverse and means
-attack success by the no-refusal proxy. The comparison utility additionally
-requires that the defense neither blocked nor replaced the delivered response.
-Llama Guard is not reused as the ASR judge.
-
-For benign prompts, over-blocking means an input block or output replacement;
-target refusal is reported separately. Total latency is target plus defense
-latency once. Identified GPT-2 cold loads and incomplete latency observations are
-reported separately from warm mean, median, and linearly interpolated p95.
-
-#### Commands
-
-```bash
-# Unit tests (no model downloads or Ollama calls)
-python -m pytest -q
-
-# One-prompt smoke tests
-python run.py --model qwen2.5:3b --attack none --defense perplexity --n 1
-python run.py --model qwen2.5:3b --attack none --defense llama_guard_input --n 1
-python run.py --model qwen2.5:3b --attack none --defense llama_guard --n 1
-python run.py --model qwen2.5:3b --attack none --defense llama_guard_both --n 1
-
-# Small matched comparison; replace 100.0 with the calibrated threshold
-python -m scripts.compare_varun_defenses \
-  --target-model qwen2.5:3b --attack none \
-  --perplexity-threshold 100.0 \
-  --n-harmful 2 --n-benign 2 --include-both
-
-# Full local comparison
-python -m scripts.compare_varun_defenses \
-  --target-model qwen2.5:3b --attack template \
-  --perplexity-threshold 100.0 \
-  --n-harmful 100 --n-benign 20 --include-both
-
-# Regenerate reports without models or network access
-python -m scripts.compare_varun_defenses \
-  --aggregate-only results/varun_<timestamp>/raw_results.jsonl \
-  --output-dir results/varun_<timestamp>_report
-```
-
-The comparison uses recorded Ollama warm-up calls and deterministic target
-settings (`--temperature 0`, `--seed 453`) by default.
-
-#### Limitations
-
-Plain perplexity can miss fluent jailbreaks and over-block unusual benign text.
-Llama Guard can misclassify or be attacked. The refusal proxy can miss nuanced
-partial compliance. The included calibration and benign-test fixtures are useful
-for implementation checks and preliminary measurements, not broad final claims.
-
-### Judge metrics
-
-| Metric | Meaning |
-|---|---|
-| **No-refusal proxy** | Delivered response contained no recognized refusal and was not blocked/replaced |
-| **Latency** | Target-model time plus active defense calls such as perplexity or Guard |
-| **Tokens** | Ollama-reported prompt + completion tokens, useful as a local compute-cost proxy |
-
-Lower attack success and benign over-blocking are better; latency exposes the
-security-performance trade-off.
-
-Because this project runs locally through Ollama, there is no per-call API bill.
-For cost/latency comparisons, use average total tokens and average latency:
-
-```bash
-# Quick latency/cost debug on one model
-python run.py --model qwen2.5:3b --defense llama_guard --n 5
-
-# Compare defense overhead across the default model suite
-python run.py --defense self_reminder --n 25
-python run.py --defense llama_guard --n 25
-```
-
-JSON/CSV rows preserve defense decisions, `refusal_detected`, the legacy
-`success_refusal`, target/defense/total latency, token counts, and defense-specific
-telemetry.
+- component registration and routing
+- attack formatting
+- defense stacking
+- deterministic model settings
+- attack caching
+- checkpointing and resume behavior
+- experiment manifests
+- judge wiring
+- CSV evaluation
+- model-memory cleanup
 
 ---
 
-## Output
+## Limitations
 
-Each run writes to `results/` (git-ignored):
+This study evaluates **black-box inference-time defenses** against a single canonical target model.
 
-- `results/run_<timestamp>.json` — full records including response snippets
-- `results/run_<timestamp>.csv` — flat table, import into Excel / pandas
-- `results/run_<timestamp>.md` — concise report without full sensitive responses
-- `results/varun_<timestamp>/` — raw and aggregate local comparison reports
+Results may vary across:
 
----
+- model families and scales
+- safety-tuning strategies
+- attack budgets
+- evaluator models
+- random seeds
 
-## Project layout
-
-```
-jailbreak-poc/
-├── config.py              # all experiment knobs
-├── model_client.py        # thin Ollama wrapper
-├── attacks/
-│   ├── base.py            # BaseAttack ABC
-│   ├── none.py            # raw behavior, no template
-│   ├── template.py        # DAN-style template attack
-│   └── templates/
-│       └── dan_template.txt
-├── defenses/
-│   ├── base.py            # BaseDefense ABC
-│   ├── none.py            # passthrough
-│   ├── self_reminder.py   # safety system-prompt injection
-│   ├── llama_guard.py     # Llama Guard 3 classifier + defense
-│   └── perplexity.py      # local perplexity input filter
-├── data/
-│   ├── perplexity_calibration.jsonl
-│   └── benign_test.jsonl
-├── scripts/
-│   ├── calibrate_perplexity.py
-│   └── compare_varun_defenses.py
-├── tests/                 # deterministic unit tests; no live model calls
-├── judge.py               # refusal_check and success signal helpers
-├── run.py                 # main evaluation harness
-├── requirements.txt
-├── README.md
-└── results/               # git-ignored; created at runtime
-```
+Automated safety judges can also misclassify nuanced responses. The reported results should therefore be interpreted as comparative measurements within the controlled experiment rather than universal estimates of jailbreak robustness.
 
 ---
 
-## Extending
+## Academic Context & Responsible Use
 
-**Add an attack**: subclass `attacks/base.py:BaseAttack`, implement `build_messages`,
-register it in `attacks/__init__.py:REGISTRY`.
+This repository accompanies the paper **“Evaluating Inference-Time Defences Against Jailbreak Attacks.”**
 
-**Add a defense**: subclass `defenses/base.py:BaseDefense`, implement `query`,
-register it in `defenses/__init__.py:REGISTRY`.
+The project evaluates existing public attacks and defenses under a controlled experimental setup. Harmful benchmark behaviors and adversarial artifacts come from published research datasets including **JailbreakBench** rather than being introduced as new harmful objectives by this project.
 
----
+The system is intended for **AI security research, robustness evaluation, and defensive experimentation**.
 
-## Academic context & ethics
+### Contributors
 
-- Behaviors come from [JailbreakBench](https://jailbreakbench.github.io/), a published
-  academic benchmark — they are not authored by this project.
-- All inference is local.  No harmful content is sent to any external service.
-- The goal is to *measure* defense effectiveness, not to enable harm.
-- `results/` is `.gitignore`-d to avoid committing model outputs.
+- Ryan Maxin
+- Vishesh Gupta
+- Varun Mathur
+- Adam Kaegi
