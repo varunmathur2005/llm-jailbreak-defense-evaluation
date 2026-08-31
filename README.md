@@ -4,7 +4,7 @@ A modular framework for evaluating **inference-time defenses against LLM jailbre
 
 **[Paper](./paper.pdf)**
 
-Built as a University of Waterloo computer security research project by **Ryan Maxin, Vishesh Gupta, Varun Mathur, and Adam Kaegi**.
+Built as a security research project by **Ryan Maxin, Vishesh Gupta, Varun Mathur, and Adam Kaegi**.
 
 ## Highlights
 
